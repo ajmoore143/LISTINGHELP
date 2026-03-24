@@ -24,7 +24,28 @@ DEFAULT_WEIGHTS = {
 
 
 def load_csv_file(uploaded_file) -> pd.DataFrame:
-    return pd.read_csv(uploaded_file)
+    """
+    More robust CSV loader for exports from Sellerise / Amazon tools.
+    Tries multiple common formats before failing.
+    """
+    attempts = [
+        {"encoding": "utf-8-sig"},
+        {"encoding": "utf-8-sig", "sep": ";"},
+        {"encoding": "latin1"},
+        {"encoding": "latin1", "sep": ";"},
+        {"engine": "python", "sep": None},
+    ]
+
+    last_error = None
+
+    for kwargs in attempts:
+        try:
+            uploaded_file.seek(0)
+            return pd.read_csv(uploaded_file, **kwargs)
+        except Exception as e:
+            last_error = e
+
+    raise ValueError(f"Could not parse CSV file. Last parser error: {last_error}")
 
 
 def preview_dataframe(df: pd.DataFrame, title: str) -> None:
