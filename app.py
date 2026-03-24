@@ -10,6 +10,7 @@ from modules.keywords import (
     standardize_keyword_df,
     merge_keyword_sources,
     score_keywords,
+    apply_conversion_threshold,
 )
 from modules.listing import generate_listing, export_listing_text
 
@@ -35,6 +36,17 @@ with st.sidebar:
     w_cpc = st.slider("CPC efficiency", 0.0, 1.0, float(DEFAULT_WEIGHTS["cpc"]), 0.01)
     w_relevance = st.slider("Relevance / specificity", 0.0, 1.0, float(DEFAULT_WEIGHTS["relevance"]), 0.01)
 
+    st.divider()
+    st.header("Keyword filtering")
+    conversion_floor = st.number_input(
+        "Minimum conversion %",
+        min_value=0.0,
+        max_value=100.0,
+        value=20.0,
+        step=1.0,
+        help="Keywords below this conversion threshold will be removed before scoring. If none remain, the pipeline will automatically retry at 15%.",
+    )
+
 weights = {
     "clicks": w_clicks,
     "sales": w_sales,
@@ -55,67 +67,23 @@ if "selected_keywords" not in st.session_state:
     st.session_state.selected_keywords = []
 if "listing_output" not in st.session_state:
     st.session_state.listing_output = None
+if "keyword_review_df" not in st.session_state:
+    st.session_state.keyword_review_df = None
 
 
 st.subheader("Step 0: Product Input")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    product_name = st.text_input(
-        "Product name",
-        placeholder="e.g. Lemon Tree Fertilizer 12-6-8 Citrus Plant Food",
-    )
-    category = st.text_input(
-        "Category",
-        placeholder="e.g. Garden & Outdoor",
-    )
-    target_customer = st.text_input(
-        "Target customer",
-        placeholder="e.g. Home gardeners growing citrus trees indoors or outdoors",
-    )
-
-with col2:
-    short_description = st.text_area(
-        "Short description",
-        placeholder="Describe the product in 1-3 sentences: what it is, what it does, and key features.",
-        height=140,
-    )
-    competitor_info = st.text_area(
-        "Competitor info (optional)",
-        placeholder="Competitor names, ASINs, or listing URLs",
-        height=140,
-    )
-
-optional_notes = st.text_area(
-    "Optional notes",
-    placeholder="Constraints, differentiators, ingredients, scent, size, compliance notes, etc.",
-    height=120,
-)
+product_name = st.text_input("Product name")
+category = st.text_input("Category")
+target_customer = st.text_input("Target customer")
+short_description = st.text_area("Short description")
 
 if st.button("Save Product Input"):
-    missing_fields = []
-    if not product_name.strip():
-        missing_fields.append("Product name")
-    if not short_description.strip():
-        missing_fields.append("Short description")
-    if not category.strip():
-        missing_fields.append("Category")
-    if not target_customer.strip():
-        missing_fields.append("Target customer")
-
-    if missing_fields:
-        st.error(f"Please fill in: {', '.join(missing_fields)}")
-    else:
-        st.session_state.product_input = {
-            "product_name": product_name.strip(),
-            "short_description": short_description.strip(),
-            "category": category.strip(),
-            "target_customer": target_customer.strip(),
-            "optional_notes": optional_notes.strip(),
-            "competitor_info": competitor_info.strip(),
-        }
-        st.success("Product input saved.")
+    st.session_state.product_input = {
+        "product_name": product_name,
+        "category": category,
+        "target_customer": target_customer,
+        "short_description": short_description,
+    }
 
 
 if st.session_state.product_input:
@@ -140,15 +108,63 @@ if st.session_state.research_result:
         if st.button("Run Keyword Pipeline"):
             standardized = standardize_keyword_df(df, "sellerise", mapping)
             merged = merge_keyword_sources([standardized])
-            scored = score_keywords(merged, weights)
+            filtered, applied_threshold = apply_conversion_threshold(merged, conversion_floor)
+            scored = score_keywords(filtered, weights)
             st.session_state.keyword_master_df = scored
+            st.session_state.keyword_review_df = scored.head(40).copy()
+            if applied_threshold != conversion_floor:
+                st.info(f"No keywords met {conversion_floor:.0f}% conversion, so the pipeline automatically retried at {applied_threshold:.0f}%.")
 
 
 if st.session_state.keyword_master_df is not None:
-    st.dataframe(st.session_state.keyword_master_df)
+    st.subheader("Step 3: Final Keyword Table")
+    st.caption("Showing top 40 keywords only. Select the final keywords you want to use for listing generation.")
 
-    selected = st.session_state.keyword_master_df.head(20)["keyword"].tolist()
-    st.session_state.selected_keywords = selected
+    display_columns = [
+        col for col in [
+            "selected",
+            "keyword",
+            "clicks",
+            "sales",
+            "conversion",
+            "market_availability",
+            "cpc",
+            "score",
+            "source",
+        ]
+        if col in st.session_state.keyword_review_df.columns
+    ]
+
+    edited_df = st.data_editor(
+        st.session_state.keyword_review_df[display_columns],
+        use_container_width=True,
+        num_rows="fixed",
+        hide_index=True,
+        key="keyword_review_editor",
+        column_config={
+            "selected": st.column_config.CheckboxColumn("Selected"),
+            "keyword": st.column_config.TextColumn("Keyword", disabled=True),
+            "clicks": st.column_config.NumberColumn("Clicks", disabled=True),
+            "sales": st.column_config.NumberColumn("Sales", disabled=True),
+            "conversion": st.column_config.NumberColumn("Conversion %", disabled=True, format="%.2f"),
+            "market_availability": st.column_config.NumberColumn("Market Availability", disabled=True, format="%.2f"),
+            "cpc": st.column_config.NumberColumn("CPC", disabled=True, format="%.2f"),
+            "score": st.column_config.NumberColumn("Score", disabled=True, format="%.3f"),
+            "source": st.column_config.TextColumn("Source", disabled=True),
+        },
+    )
+
+    st.session_state.keyword_review_df = edited_df
+    st.session_state.selected_keywords = edited_df.loc[edited_df["selected"] == True, "keyword"].tolist()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Visible keywords", len(edited_df))
+    with c2:
+        st.metric("Selected keywords", len(st.session_state.selected_keywords))
+
+    with st.expander("View selected keywords", expanded=False):
+        st.write(st.session_state.selected_keywords)
 
 
 if st.session_state.selected_keywords:
