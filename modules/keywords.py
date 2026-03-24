@@ -138,32 +138,52 @@ def score_keywords(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
 
 def render_mapping_editor(df: pd.DataFrame, source_label: str) -> Dict[str, str]:
     st.markdown(f"**Column mapping: {source_label}**")
-    options = ["ignore"] + list(TARGET_SCHEMA.keys())
-    mapping: Dict[str, str] = {}
-    cols = st.columns(2)
+    st.caption("Choose only the source columns you actually want to use in scoring. Everything else stays ignored.")
 
-    for idx, column_name in enumerate(df.columns):
-        with cols[idx % 2]:
-            guessed = "ignore"
-            lowered = column_name.strip().lower()
-            if "keyword" in lowered or lowered in {"search term", "query", "term"}:
-                guessed = "keyword"
-            elif "click" in lowered:
-                guessed = "clicks"
-            elif "sale" in lowered or "order" in lowered:
-                guessed = "sales"
-            elif "conversion" in lowered or "cvr" in lowered:
-                guessed = "conversion"
-            elif "availability" in lowered or "competition" in lowered:
-                guessed = "market_availability"
-            elif lowered in {"cpc", "bid", "suggested bid", "cost per click"}:
-                guessed = "cpc"
+    columns = list(df.columns)
 
-            mapping[column_name] = st.selectbox(
-                f"{source_label}: {column_name}",
+    def guess_column(target: str) -> str:
+        for col in columns:
+            lowered = col.strip().lower()
+
+            if target == "keyword" and ("keyword" in lowered or lowered in {"search term", "query", "term"}):
+                return col
+            if target == "clicks" and lowered == "clicks":
+                return col
+            if target == "sales" and lowered == "sales":
+                return col
+            if target == "conversion" and ("conversion" in lowered or lowered == "cvr"):
+                return col
+            if target == "market_availability" and ("market availability" in lowered or "availability" in lowered):
+                return col
+            if target == "cpc" and lowered in {"cpc", "bid", "suggested bid", "cost per click"}:
+                return col
+
+        for col in columns:
+            lowered = col.strip().lower()
+            if target == "clicks" and "click" in lowered and "trend" not in lowered and "pos" not in lowered and "other" not in lowered:
+                return col
+            if target == "sales" and "sale" in lowered and "trend" not in lowered and "pos" not in lowered and "daily" not in lowered and "other" not in lowered:
+                return col
+
+        return "ignore"
+
+    options = ["ignore"] + columns
+    target_fields = ["keyword", "clicks", "sales", "conversion", "market_availability", "cpc"]
+
+    mapping: Dict[str, str] = {col: "ignore" for col in columns}
+
+    left, right = st.columns(2)
+    for idx, target in enumerate(target_fields):
+        guessed = guess_column(target)
+        with (left if idx % 2 == 0 else right):
+            selected_source = st.selectbox(
+                f"Map to {target}",
                 options,
-                index=options.index(guessed),
-                key=f"map_{source_label}_{column_name}",
+                index=options.index(guessed) if guessed in options else 0,
+                key=f"map_{source_label}_{target}",
             )
+            if selected_source != "ignore":
+                mapping[selected_source] = target
 
     return mapping
