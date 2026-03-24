@@ -58,18 +58,64 @@ if "listing_output" not in st.session_state:
 
 
 st.subheader("Step 0: Product Input")
-product_name = st.text_input("Product name")
-category = st.text_input("Category")
-target_customer = st.text_input("Target customer")
-short_description = st.text_area("Short description")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    product_name = st.text_input(
+        "Product name",
+        placeholder="e.g. Lemon Tree Fertilizer 12-6-8 Citrus Plant Food",
+    )
+    category = st.text_input(
+        "Category",
+        placeholder="e.g. Garden & Outdoor",
+    )
+    target_customer = st.text_input(
+        "Target customer",
+        placeholder="e.g. Home gardeners growing citrus trees indoors or outdoors",
+    )
+
+with col2:
+    short_description = st.text_area(
+        "Short description",
+        placeholder="Describe the product in 1-3 sentences: what it is, what it does, and key features.",
+        height=140,
+    )
+    competitor_info = st.text_area(
+        "Competitor info (optional)",
+        placeholder="Competitor names, ASINs, or listing URLs",
+        height=140,
+    )
+
+optional_notes = st.text_area(
+    "Optional notes",
+    placeholder="Constraints, differentiators, ingredients, scent, size, compliance notes, etc.",
+    height=120,
+)
 
 if st.button("Save Product Input"):
-    st.session_state.product_input = {
-        "product_name": product_name,
-        "category": category,
-        "target_customer": target_customer,
-        "short_description": short_description,
-    }
+    missing_fields = []
+    if not product_name.strip():
+        missing_fields.append("Product name")
+    if not short_description.strip():
+        missing_fields.append("Short description")
+    if not category.strip():
+        missing_fields.append("Category")
+    if not target_customer.strip():
+        missing_fields.append("Target customer")
+
+    if missing_fields:
+        st.error(f"Please fill in: {', '.join(missing_fields)}")
+    else:
+        st.session_state.product_input = {
+            "product_name": product_name.strip(),
+            "short_description": short_description.strip(),
+            "category": category.strip(),
+            "target_customer": target_customer.strip(),
+            "optional_notes": optional_notes.strip(),
+            "competitor_info": competitor_info.strip(),
+        }
+        st.success("Product input saved.")
 
 
 if st.session_state.product_input:
