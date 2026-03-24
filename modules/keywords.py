@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -109,6 +109,17 @@ def merge_keyword_sources(dataframes: List[pd.DataFrame]) -> pd.DataFrame:
     )
     return grouped
 
+def apply_conversion_threshold(df: pd.DataFrame, preferred_threshold: float = 20.0) -> Tuple[pd.DataFrame, float]:
+    filtered_20 = df[df["conversion"] >= preferred_threshold].copy()
+    if not filtered_20.empty:
+        return filtered_20, preferred_threshold
+
+    fallback_threshold = 15.0
+    filtered_15 = df[df["conversion"] >= fallback_threshold].copy()
+    if not filtered_15.empty:
+        return filtered_15, fallback_threshold
+
+    return df.copy(), 0.0
 
 def score_keywords(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
     scored = df.copy()
