@@ -72,18 +72,42 @@ if "keyword_review_df" not in st.session_state:
 
 
 st.subheader("Step 0: Product Input")
-product_name = st.text_input("Product name")
-category = st.text_input("Category")
-target_customer = st.text_input("Target customer")
-short_description = st.text_area("Short description")
+
+col1, col2 = st.columns(2)
+with col1:
+    product_name = st.text_input("Product name")
+    category = st.text_input("Category")
+    target_customer = st.text_input("Target customer")
+
+with col2:
+    short_description = st.text_area("Short description", height=140)
+    competitor_info = st.text_area("Competitor info (optional)", height=140)
+
+optional_notes = st.text_area("Optional notes", height=120)
 
 if st.button("Save Product Input"):
-    st.session_state.product_input = {
-        "product_name": product_name,
-        "category": category,
-        "target_customer": target_customer,
-        "short_description": short_description,
-    }
+    missing_fields = []
+    if not product_name.strip():
+        missing_fields.append("Product name")
+    if not category.strip():
+        missing_fields.append("Category")
+    if not target_customer.strip():
+        missing_fields.append("Target customer")
+    if not short_description.strip():
+        missing_fields.append("Short description")
+
+    if missing_fields:
+        st.error(f"Please fill in: {', '.join(missing_fields)}")
+    else:
+        st.session_state.product_input = {
+            "product_name": product_name.strip(),
+            "category": category.strip(),
+            "target_customer": target_customer.strip(),
+            "short_description": short_description.strip(),
+            "competitor_info": competitor_info.strip(),
+            "optional_notes": optional_notes.strip(),
+        }
+        st.success("Product input saved.")
 
 
 if st.session_state.product_input:
