@@ -9,9 +9,15 @@ from modules.keywords import (
     render_mapping_editor,
     standardize_keyword_df,
     merge_keyword_sources,
+    filter_brand_keywords,
+    clean_keywords,
+    deduplicate_keywords,
     score_keywords,
+    assign_keyword_roles,
+    build_keyword_plan,
     apply_conversion_threshold,
 )
+from modules.category_fit import apply_category_fit
 from modules.listing import generate_listing, export_listing_text
 
 
@@ -42,9 +48,31 @@ with st.sidebar:
         "Minimum conversion %",
         min_value=0.0,
         max_value=100.0,
-        value=20.0,
+        value=0.0,
         step=1.0,
-        help="Keywords below this conversion threshold will be removed before scoring. If none remain, the pipeline will automatically retry at 15%.",
+        help="Optional hard floor on conversion. 0 disables it (recommended) so conversion is handled through smoothed scoring instead of cutting strong head terms at the threshold.",
+    )
+    extra_brands_raw = st.text_area(
+        "Additional brand names to exclude",
+        value="",
+        height=80,
+        help="One brand per line or comma-separated. Competitor brand names are removed from keyword targeting because Amazon prohibits using them in listing copy.",
+    )
+
+    st.divider()
+    st.header("Category fit (AI)")
+    use_category_fit = st.checkbox(
+        "Filter off-category keywords with AI",
+        value=True,
+        help="Uses the model to drop keywords that belong to a different product type (herbicides, seeds, wrong NPK, etc.) and rank the rest by how well they fit this product.",
+    )
+    fit_cutoff = st.slider(
+        "Minimum fit score",
+        0.0,
+        100.0,
+        40.0,
+        1.0,
+        help="Candidate keywords scoring below this fit value are removed.",
     )
 
 weights = {
@@ -69,6 +97,8 @@ if "listing_output" not in st.session_state:
     st.session_state.listing_output = None
 if "keyword_review_df" not in st.session_state:
     st.session_state.keyword_review_df = None
+if "keyword_plan" not in st.session_state:
+    st.session_state.keyword_plan = None
 
 
 st.subheader("Step 0: Product Input")
@@ -121,8 +151,8 @@ if st.session_state.research_result:
 
 
 if st.session_state.research_result:
-    st.subheader("Step 2: Upload CSV")
-    file = st.file_uploader("Upload Sellerise CSV", type=["csv"])
+    st.subheader("Step 2: Upload Keyword File")
+    file = st.file_uploader("Upload Sellerise export (CSV or Excel)", type=["csv", "xlsx", "xlsm"])
 
     if file is not None:
         df = load_csv_file(file)
@@ -130,13 +160,46 @@ if st.session_state.research_result:
         mapping = render_mapping_editor(df, "sellerise")
 
         if st.button("Run Keyword Pipeline"):
+            extra_brands = [
+                b.strip()
+                for chunk in extra_brands_raw.replace(",", "\n").splitlines()
+                for b in [chunk]
+                if b.strip()
+            ]
             standardized = standardize_keyword_df(df, "sellerise", mapping)
             merged = merge_keyword_sources([standardized])
+            merged, removed_junk = clean_keywords(merged)
+            merged, removed_brands = filter_brand_keywords(merged, extra_brands)
+            merged = deduplicate_keywords(merged)
             filtered, applied_threshold = apply_conversion_threshold(merged, conversion_floor)
             scored = score_keywords(filtered, weights)
+
+            dropped_fit = 0
+            if use_category_fit:
+                try:
+                    scored, dropped_fit = apply_category_fit(
+                        scored,
+                        st.session_state.product_input,
+                        st.session_state.research_result,
+                        fit_cutoff=fit_cutoff,
+                    )
+                except Exception as exc:  # noqa: BLE001 - surface to user, keep pipeline alive
+                    st.warning(f"Category-fit step skipped: {exc}")
+
+            scored = assign_keyword_roles(scored)
             st.session_state.keyword_master_df = scored
             st.session_state.keyword_review_df = scored.head(40).copy()
-            if applied_threshold != conversion_floor:
+
+            messages = []
+            if len(removed_junk) > 0:
+                messages.append(f"{len(removed_junk)} junk keyword(s) cleaned")
+            if len(removed_brands) > 0:
+                messages.append(f"{len(removed_brands)} brand keyword(s) removed")
+            if dropped_fit > 0:
+                messages.append(f"{dropped_fit} off-category keyword(s) dropped")
+            if messages:
+                st.info("Pre-scoring filters: " + "; ".join(messages) + ".")
+            if conversion_floor > 0 and applied_threshold != conversion_floor:
                 st.info(f"No keywords met {conversion_floor:.0f}% conversion, so the pipeline automatically retried at {applied_threshold:.0f}%.")
 
 
@@ -148,11 +211,13 @@ if st.session_state.keyword_master_df is not None:
         col for col in [
             "selected",
             "keyword",
+            "role",
             "clicks",
             "sales",
             "conversion",
             "market_availability",
-            "cpc",
+            "relevance",
+            "category_fit",
             "score",
             "source",
         ]
@@ -168,11 +233,13 @@ if st.session_state.keyword_master_df is not None:
         column_config={
             "selected": st.column_config.CheckboxColumn("Selected"),
             "keyword": st.column_config.TextColumn("Keyword", disabled=True),
+            "role": st.column_config.TextColumn("Placement", disabled=True),
             "clicks": st.column_config.NumberColumn("Clicks", disabled=True),
             "sales": st.column_config.NumberColumn("Sales", disabled=True),
             "conversion": st.column_config.NumberColumn("Conversion %", disabled=True, format="%.2f"),
             "market_availability": st.column_config.NumberColumn("Market Availability", disabled=True, format="%.2f"),
-            "cpc": st.column_config.NumberColumn("CPC", disabled=True, format="%.2f"),
+            "relevance": st.column_config.NumberColumn("Relevance", disabled=True, format="%.0f"),
+            "category_fit": st.column_config.NumberColumn("Fit", disabled=True, format="%.0f"),
             "score": st.column_config.NumberColumn("Score", disabled=True, format="%.3f"),
             "source": st.column_config.TextColumn("Source", disabled=True),
         },
@@ -194,19 +261,33 @@ if st.session_state.keyword_master_df is not None:
 if st.session_state.selected_keywords:
     st.subheader("Step 4: Generate Listing")
     if st.button("Generate Listing"):
+        keyword_plan = build_keyword_plan(
+            st.session_state.keyword_master_df,
+            st.session_state.selected_keywords,
+        )
+        st.session_state.keyword_plan = keyword_plan
         st.session_state.listing_output = generate_listing(
             st.session_state.product_input,
             st.session_state.research_result,
-            st.session_state.selected_keywords,
+            keyword_plan,
         )
 
 
 if st.session_state.listing_output:
     st.json(st.session_state.listing_output)
 
+    backend_terms = ""
+    if st.session_state.keyword_plan:
+        backend_terms = st.session_state.keyword_plan.get("backend_terms", "")
+        if backend_terms:
+            st.subheader("Backend Search Terms")
+            st.caption(f"Ready for Seller Central ({len(backend_terms.encode('utf-8'))} / 249 bytes).")
+            st.code(backend_terms, language=None)
+
     export_text = export_listing_text(
         st.session_state.product_input,
         st.session_state.listing_output,
+        backend_terms,
     )
 
     st.download_button("Download", export_text)
