@@ -1,0 +1,7 @@
+streamlit>=1.42
+pandas
+numpy
+openpyxl
+openai
+supabase
+Authlib>=1.3.2
