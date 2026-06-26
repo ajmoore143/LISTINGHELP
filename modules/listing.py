@@ -1,0 +1,117 @@
+import json
+from typing import Any, Dict, List
+
+import config
+from modules import llm
+from prompts.listing_prompt import LISTING_SYSTEM_PROMPT
+
+
+def generate_listing(
+    product_input: Dict[str, Any],
+    research_result: Dict[str, Any],
+    keyword_plan: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    schema = {
+        "type": "object",
+        "properties": {
+            "titles": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 3,
+                "maxItems": 3,
+            },
+            "bullets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 5,
+                "maxItems": 5,
+            },
+            "description": {"type": "string"},
+            "image_prompts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 5,
+                "maxItems": 5,
+            },
+        },
+        "required": ["titles", "bullets", "description", "image_prompts"],
+        "additionalProperties": False,
+    }
+
+    title_keywords = keyword_plan.get("title", [])
+    bullet_keywords = keyword_plan.get("bullets", [])
+    backend_keywords = keyword_plan.get("backend", [])
+    all_keywords = keyword_plan.get("all", [])
+
+    user_prompt = f"""
+Create Amazon listing draft content.
+
+Product input:
+{json.dumps(product_input, indent=2)}
+
+Research summary:
+{json.dumps(research_result, indent=2)}
+
+Keyword placement plan:
+- TITLE keywords (use these in the title variants, strongest first):
+{json.dumps(title_keywords, indent=2)}
+- BULLET keywords (integrate naturally into the bullet points):
+{json.dumps(bullet_keywords, indent=2)}
+- BACKEND keywords (long-tail / supporting terms):
+{json.dumps(backend_keywords, indent=2)}
+- ALL keywords (the description MUST incorporate every one of these):
+{json.dumps(all_keywords, indent=2)}
+
+Requirements:
+- Generate exactly 3 title variants.
+- Generate exactly 5 bullet points.
+- Generate 1 SEO-friendly description.
+- Generate exactly 5 image prompts.
+- Place TITLE keywords in the titles and BULLET keywords in the bullets.
+- The description must use ALL keywords listed above, not just a subset, while
+  still reading like coherent, natural prose.
+- Keep the writing commercially useful and readable.
+- Avoid unsupported claims.
+- Return JSON only.
+""".strip()
+
+    return llm.complete_json(
+        config.MODEL_LISTING,
+        LISTING_SYSTEM_PROMPT,
+        user_prompt,
+        schema,
+        max_tokens=config.MAX_TOKENS_LISTING,
+    )
+
+
+def export_listing_text(
+    product_input: Dict[str, Any],
+    listing_output: Dict[str, Any],
+    backend_search_terms: str = "",
+) -> str:
+    lines: List[str] = []
+    lines.append("AMAZON LISTING EXPORT")
+    lines.append("")
+    lines.append(f"Product Name: {product_input.get('product_name', '')}")
+    lines.append(f"Product Type: {product_input.get('product_type', '')}")
+    lines.append(f"Form & Size: {product_input.get('form_size', '')}")
+    lines.append("")
+    lines.append("TITLE VARIANTS")
+    for i, title in enumerate(listing_output["titles"], start=1):
+        lines.append(f"{i}. {title}")
+    lines.append("")
+    lines.append("BULLET POINTS")
+    for i, bullet in enumerate(listing_output["bullets"], start=1):
+        lines.append(f"{i}. {bullet}")
+    lines.append("")
+    lines.append("SEO DESCRIPTION")
+    lines.append(listing_output["description"])
+    lines.append("")
+    if backend_search_terms:
+        lines.append("BACKEND SEARCH TERMS")
+        lines.append(backend_search_terms)
+        lines.append("")
+    lines.append("IMAGE PROMPTS")
+    for i, prompt in enumerate(listing_output["image_prompts"], start=1):
+        lines.append(f"{i}. {prompt}")
+    return "\n".join(lines)
